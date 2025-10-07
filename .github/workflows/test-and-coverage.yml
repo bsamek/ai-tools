@@ -19,6 +19,13 @@ jobs:
       COV_TARGET: "."              # change to "src" if project uses src/ layout
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.head_ref }}
+
+      - name: Fetch base branch
+        if: github.event_name == 'pull_request'
+        run: git fetch origin ${{ github.base_ref }}:refs/remotes/origin/${{ github.base_ref }}
 
       - uses: actions/setup-python@v5
         with:
@@ -88,7 +95,6 @@ jobs:
       - name: Enforce patch coverage (diff vs base)
         if: github.event_name == 'pull_request'
         run: |
-          git fetch --no-tags origin +refs/heads/${{ github.base_ref }}:refs/remotes/origin/${{ github.base_ref }}
           base="origin/${{ github.base_ref }}"
           pct=$(diff-cover \
               "${REPORT_PATH}" \
