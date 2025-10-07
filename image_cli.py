@@ -10,7 +10,7 @@ Command-line helper for generating images via the OpenAI API using gpt-image-1.
 
 Workflow:
 1. Collect a user prompt via CLI flags or interactive input.
-2. Generate an image using gpt-image-1 through the Responses API.
+2. Generate an image by calling the Images API (`/v1/images/generations`).
 3. Save the image to a file.
 
 The script is intended to be executed with `uv run image_cli.py [OPTIONS]`.
@@ -34,12 +34,12 @@ except ImportError as exc:  # pragma: no cover - runtime failure path
     ) from exc
 
 
-DEFAULT_MODEL = "gpt-5-mini"
+DEFAULT_MODEL = "gpt-image-1"
 
 
 def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Generate images with gpt-image-1 via the Responses API.",
+        description="Generate images with gpt-image-1 via the Images API.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument("--prompt", help="Inline prompt text.")
@@ -54,7 +54,7 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
     parser.add_argument(
         "--model",
         default=DEFAULT_MODEL,
-        help="Model to use for image generation (e.g., gpt-4.1-mini, gpt-5-mini).",
+        help="Model to use for image generation (e.g., gpt-image-1).",
     )
     parser.add_argument(
         "--dry-run",
@@ -121,29 +121,25 @@ def instantiate_client(api_key: str) -> OpenAI:
 
 def generate_image(client: OpenAI, prompt: str, model: str) -> str:
     """
-    Generate an image using the Responses API with image_generation tool.
+    Generate an image using the Images API.
     Returns the base64-encoded image data.
     """
     try:
-        response = client.responses.create(
+        response = client.images.generate(
             model=model,
-            input=prompt,
-            tools=[{"type": "image_generation"}],
+            prompt=prompt,
         )
     except OpenAIError as exc:
         raise SystemExit(f"Failed to generate image: {exc}") from exc
 
-    # Extract image data from response
-    image_data = [
-        output.result
-        for output in response.output
-        if output.type == "image_generation_call"
-    ]
+    if not response.data:
+        raise SystemExit("No image data returned in the response.")
 
+    image_data = response.data[0].b64_json
     if not image_data:
-        raise SystemExit("No image was generated in the response.")
+        raise SystemExit("Image payload missing from the response.")
 
-    return image_data[0]
+    return image_data
 
 
 def resolve_output_path(args: argparse.Namespace, suffix: str = ".png") -> Path:
@@ -175,7 +171,7 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
         print("[dry-run] Image generation request:")
         print(f"  Model: {args.model}")
         print(f"  Prompt: {prompt}")
-        print(f"  Tools: [image_generation]")
+        print("  Endpoint: images.generate (/v1/images/generations)")
         return
 
     api_key = ensure_api_key()
