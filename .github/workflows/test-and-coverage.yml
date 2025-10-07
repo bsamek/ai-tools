@@ -1,0 +1,121 @@
+name: test-and-coverage
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  coverage:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write  # needed only for PR comment step (optional)
+    env:
+      MIN_TOTAL: "85"              # absolute floor (%)
+      MIN_PATCH: "85"              # changed-lines floor (%)
+      REPORT_PATH: "coverage.xml"
+      REPORT_FORMAT: "cobertura"
+      PYTHON_VERSION: "3.12"
+      COV_TARGET: "."              # change to "src" if project uses src/ layout
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install test deps
+        run: |
+          python -m pip install -U pip
+          python -m pip install pytest pytest-cov coverage diff-cover
+
+      - name: Run tests with coverage
+        run: |
+          pytest \
+            --cov=${{ env.COV_TARGET }} \
+            --cov-report=xml:${{ env.REPORT_PATH }} \
+            --cov-report=term-missing
+
+      - name: Upload raw coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: ${{ env.REPORT_PATH }}
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Compute TOTAL (from Cobertura) and write Checks summary header
+        run: |
+          python - <<'PY' >> "$GITHUB_ENV"
+          import os
+          import xml.etree.ElementTree as ET
+
+          report_path = os.environ["REPORT_PATH"]
+          root = ET.parse(report_path).getroot()
+          rate = float(root.attrib.get("line-rate", 0)) * 100
+          print(f"TOTAL={rate:.2f}")
+          PY
+          {
+            echo "### Coverage Summary"
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Show TOTAL in Checks summary
+        run: |
+          echo "| Metric | Value |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|---|---:|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Total lines | ${TOTAL}% |" >> "$GITHUB_STEP_SUMMARY"
+          echo "Total coverage: ${TOTAL}%"
+
+      - name: Enforce absolute floor
+        run: |
+          python - <<'PY'
+          import os
+          import sys
+
+          min_total = float(os.environ["MIN_TOTAL"])
+          total = float(os.environ["TOTAL"])
+          if total < min_total:
+              print(f"Coverage {total:.2f}% is below floor {min_total:.2f}%")
+              sys.exit(1)
+          print(f"Absolute floor OK: {total:.2f}% ≥ {min_total:.2f}%")
+          PY
+
+      - name: Enforce patch coverage (diff vs base)
+        if: github.event_name == 'pull_request'
+        run: |
+          git fetch --no-tags origin +refs/heads/${{ github.base_ref }}:refs/remotes/origin/${{ github.base_ref }}
+          base="origin/${{ github.base_ref }}"
+          pct=$(diff-cover "${REPORT_PATH}" --compare-branch "$base" --json-report - | python - <<'PY'
+          import json
+          import sys
+
+          data = json.load(sys.stdin)
+          print(data['total']['coverage'] or 0)
+          PY
+          )
+          printf 'Patch coverage: %.2f%%\n' "$pct"
+          {
+            echo "| Changed lines | $(printf '%.2f' "$pct")% |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          PATCH_COVERAGE="$pct" python - <<'PY'
+          import os
+          import sys
+
+          min_patch = float(os.environ["MIN_PATCH"])
+          patch = float(os.environ["PATCH_COVERAGE"])
+          if patch < min_patch:
+              print(f"Patch coverage {patch:.2f}% is below floor {min_patch:.2f}%")
+              sys.exit(1)
+          print(f"Patch floor OK: {patch:.2f}% ≥ {min_patch:.2f}%")
+          PY
+          echo "PATCH=$(printf '%.2f' "$pct")" >> "$GITHUB_ENV"
+
+      - name: (Optional) Comment brief coverage on PR
+        if: github.event_name == 'pull_request'
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          issue-number: ${{ github.event.pull_request.number }}
+          body: |
+            **Coverage:** ${{ env.TOTAL }}% total • Patch shown in Checks.
+            _Full report attached as an artifact (coverage.xml)._
