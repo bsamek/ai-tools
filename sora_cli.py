@@ -175,19 +175,20 @@ def improve_prompt(
     system_instructions = (
         "You are an expert Sora prompt engineer. "
         "Rewrite prompts to maximize video fidelity and adhere to best practices. "
-        "Return strict JSON with keys: improved_prompt, analysis, tips."
+        "Respond ONLY with compact JSON containing exactly the keys "
+        '`improved_prompt`, `analysis`, and `tips`.'
     )
 
     request_input = [
         {
             "role": "system",
-            "content": [{"type": "text", "text": system_instructions}],
+            "content": [{"type": "input_text", "text": system_instructions}],
         },
         {
             "role": "user",
             "content": [
                 {
-                    "type": "text",
+                    "type": "input_text",
                     "text": (
                         "Original prompt:\n"
                         f"{prompt}\n\n"
@@ -204,7 +205,6 @@ def improve_prompt(
         response = client.responses.create(
             model=model,
             input=request_input,
-            response_format={"type": "json_object"},
         )
     except OpenAIError as exc:
         print(f"[warn] Prompt refinement failed: {exc}. Using original prompt.")
@@ -220,22 +220,28 @@ def parse_prompt_review(response: Any, fallback_prompt: str) -> Tuple[str, str, 
     if parsing fails or the expected keys are missing.
     """
     try:
+        texts = []
+
         output_blocks = getattr(response, "output", None) or getattr(
             response, "outputs", None
         )
-        if not output_blocks:
-            raise ValueError("Response did not contain output blocks.")
+        if output_blocks:
+            for block in output_blocks:
+                content_list = block.get("content") if isinstance(block, dict) else None
+                if not content_list:
+                    continue
+                for content_item in content_list:
+                    if content_item.get("type") == "output_text":
+                        texts.append(content_item.get("text", ""))
+                    elif content_item.get("type") == "text":
+                        texts.append(content_item.get("text", ""))
 
-        texts = []
-        for block in output_blocks:
-            content_list = block.get("content") if isinstance(block, dict) else None
-            if not content_list:
-                continue
-            for content_item in content_list:
-                if content_item.get("type") == "output_text":
-                    texts.append(content_item.get("text", ""))
-                elif content_item.get("type") == "text":
-                    texts.append(content_item.get("text", ""))
+        output_text = getattr(response, "output_text", None)
+        if output_text:
+            texts.append(str(output_text))
+
+        if not texts:
+            raise ValueError("Response did not contain parseable text content.")
 
         raw_text = "\n".join(filter(None, texts)).strip()
         data = json.loads(raw_text)
@@ -299,12 +305,15 @@ def build_video_request_payload(
     prompt: str,
     args: argparse.Namespace,
 ) -> Dict[str, Any]:
+    width_height = parse_size(args.size)
     video_params: Dict[str, Any] = {
-        "type": "video_generation",
-        "duration_seconds": args.duration,
-        "size": args.size,
         "format": args.format,
+        "duration": args.duration,
     }
+    if width_height:
+        width, height = width_height
+        video_params["width"] = width
+        video_params["height"] = height
     if args.aspect_ratio:
         video_params["aspect_ratio"] = args.aspect_ratio
     if args.fps:
@@ -312,18 +321,34 @@ def build_video_request_payload(
     if args.seed is not None:
         video_params["seed"] = args.seed
 
-    return {
+    payload: Dict[str, Any] = {
         "model": args.sora_model,
         "input": [
             {
                 "role": "user",
                 "content": [
                     {"type": "input_text", "text": prompt},
-                    video_params,
                 ],
             }
         ],
+        "modalities": ["video"],
+        "video": video_params,
     }
+    return payload
+
+
+def parse_size(size_str: Optional[str]) -> Optional[Tuple[int, int]]:
+    if not size_str:
+        return None
+    try:
+        width_str, height_str = size_str.lower().split("x")
+        width, height = int(width_str), int(height_str)
+        if width <= 0 or height <= 0:
+            raise ValueError
+        return width, height
+    except (ValueError, AttributeError):
+        print(f"[warn] Unrecognized size '{size_str}'. Falling back to Sora defaults.")
+        return None
 
 
 def create_sora_job(
