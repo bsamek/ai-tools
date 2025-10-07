@@ -27,9 +27,9 @@ import sys
 import textwrap
 import time
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, Optional, Tuple
+from typing import Any, Dict, Iterable, Optional
 
 try:
     from openai import OpenAI, OpenAIError  # type: ignore
@@ -39,10 +39,19 @@ except ImportError as exc:  # pragma: no cover - runtime failure path
     ) from exc
 
 
-DEFAULT_DURATION = 10
-DEFAULT_SIZE = "1920x1080"
+DEFAULT_DURATION = 8
+DEFAULT_SIZE = "1280x720"
 DEFAULT_SORA_MODEL = "sora-2"
 DEFAULT_REASONING_MODEL = "gpt-5"
+
+ALLOWED_VIDEO_SIZES = {
+    "1280x720",
+    "720x1280",
+    "1792x1024",
+    "1024x1792",
+}
+
+ALLOWED_VIDEO_SECONDS = {4, 8, 12}
 
 
 PROMPT_GUIDANCE = textwrap.dedent(
@@ -64,13 +73,6 @@ class PromptReview:
     improved: str
     analysis: str = ""
     tips: str = ""
-
-
-@dataclass
-class SoraJobStatus:
-    status: str
-    progress: Optional[float] = None
-    eta_seconds: Optional[float] = None
 
 
 def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
@@ -96,25 +98,24 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         action="store_true",
         help="Bypass GPT-5 prompt refinement and send the prompt as-is.",
     )
+    parser.add_argument(
+        "--refine-only",
+        action="store_true",
+        help="Run the prompt refinement workflow and exit without calling Sora.",
+    )
     parser.add_argument("--output", type=Path, help="Destination filename for the video.")
     parser.add_argument(
         "--duration",
         type=int,
         default=DEFAULT_DURATION,
-        help="Target duration in seconds.",
+        help="Target duration in seconds (allowed values: 4, 8, 12).",
     )
     parser.add_argument(
         "--size",
+        choices=sorted(ALLOWED_VIDEO_SIZES),
         default=DEFAULT_SIZE,
-        help="Frame size WIDTHxHEIGHT (e.g. 1920x1080).",
+        help="Predefined output resolution.",
     )
-    parser.add_argument(
-        "--aspect-ratio",
-        help="Optional aspect ratio hint (e.g. 16:9, 9:16, 1:1).",
-    )
-    parser.add_argument("--fps", type=int, help="Frames per second hint.")
-    parser.add_argument("--seed", type=int, help="Random seed for deterministic runs.")
-    parser.add_argument("--format", default="mp4", help="Desired output container.")
     parser.add_argument(
         "--timeout",
         type=int,
@@ -277,8 +278,8 @@ def parse_prompt_review(response: Any, fallback_prompt: str) -> Tuple[str, str, 
         raw_text = "\n".join(filter(None, texts)).strip()
         data = json.loads(raw_text)
         improved = data.get("improved_prompt") or fallback_prompt
-        analysis = data.get("analysis", "")
-        tips = data.get("tips", "")
+        analysis = _coerce_to_text(data.get("analysis"))
+        tips = _coerce_to_text(data.get("tips"))
         return improved.strip(), analysis.strip(), tips.strip()
 
     except (ValueError, TypeError, json.JSONDecodeError) as exc:
@@ -286,22 +287,34 @@ def parse_prompt_review(response: Any, fallback_prompt: str) -> Tuple[str, str, 
         return fallback_prompt, "", ""
 
 
+def _coerce_to_text(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (int, float, bool)):
+        return str(value)
+    if isinstance(value, list):
+        parts = []
+        for item in value:
+            text = _coerce_to_text(item).strip()
+            if text:
+                parts.append(text)
+        return "\n".join(parts)
+    if isinstance(value, dict):
+        try:
+            return json.dumps(value, indent=2)
+        except TypeError:
+            return str(value)
+    return str(value)
+
+
 def choose_prompt(review: PromptReview, auto_approve: bool) -> str:
     if auto_approve or review.improved == review.original:
         print("Using refined prompt.")
         return review.improved
 
-    print("\n--- Prompt Comparison ---")
-    print("Original:\n")
-    print(textwrap.indent(review.original, prefix="  "))
-    print("\nRefined:\n")
-    print(textwrap.indent(review.improved, prefix="  "))
-    if review.analysis:
-        print("\nAnalysis:\n")
-        print(textwrap.indent(review.analysis, prefix="  "))
-    if review.tips:
-        print("\nTips:\n")
-        print(textwrap.indent(review.tips, prefix="  "))
+    display_prompt_review(review)
 
     choices = {
         "1": review.original,
@@ -332,188 +345,125 @@ def get_manual_prompt() -> str:
     return prompt
 
 
+def display_prompt_review(review: PromptReview) -> None:
+    print("\n--- Prompt Comparison ---")
+    print("Original:\n")
+    print(textwrap.indent(review.original, prefix="  "))
+    print("\nRefined:\n")
+    print(textwrap.indent(review.improved, prefix="  "))
+    if review.analysis:
+        print("\nAnalysis:\n")
+        print(textwrap.indent(review.analysis, prefix="  "))
+    if review.tips:
+        print("\nTips:\n")
+        print(textwrap.indent(review.tips, prefix="  "))
+
+
 def build_video_request_payload(
     prompt: str,
     args: argparse.Namespace,
 ) -> Dict[str, Any]:
-    width_height = parse_size(args.size)
-    video_params: Dict[str, Any] = {
-        "format": args.format,
-        "duration": args.duration,
+    request: Dict[str, Any] = {
+        "prompt": prompt,
     }
-    if width_height:
-        width, height = width_height
-        video_params["width"] = width
-        video_params["height"] = height
-    if args.aspect_ratio:
-        video_params["aspect_ratio"] = args.aspect_ratio
-    if args.fps:
-        video_params["fps"] = args.fps
-    if args.seed is not None:
-        video_params["seed"] = args.seed
+    if args.sora_model:
+        request["model"] = args.sora_model
 
-    payload: Dict[str, Any] = {
-        "model": args.sora_model,
-        "input": [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "input_text", "text": prompt},
-                ],
-            }
-        ],
-        "modalities": ["video"],
-        "video": video_params,
-    }
-    return payload
+    seconds = normalize_duration(args.duration)
+    if seconds is not None:
+        request["seconds"] = seconds
+
+    size = normalize_size(args.size)
+    if size is not None:
+        request["size"] = size
+
+    return request
 
 
-def parse_size(size_str: Optional[str]) -> Optional[Tuple[int, int]]:
-    if not size_str:
+def normalize_duration(seconds: Optional[int]) -> Optional[str]:
+    if seconds is None:
         return None
-    try:
-        width_str, height_str = size_str.lower().split("x")
-        width, height = int(width_str), int(height_str)
-        if width <= 0 or height <= 0:
-            raise ValueError
-        return width, height
-    except (ValueError, AttributeError):
-        print(f"[warn] Unrecognized size '{size_str}'. Falling back to Sora defaults.")
+    if seconds in ALLOWED_VIDEO_SECONDS:
+        return str(seconds)
+    print(
+        f"[warn] Unsupported duration '{seconds}'. Falling back to {DEFAULT_DURATION} seconds."
+    )
+    return str(DEFAULT_DURATION)
+
+
+def normalize_size(size: Optional[str]) -> Optional[str]:
+    if not size:
         return None
+    normalized = size.lower()
+    if normalized in ALLOWED_VIDEO_SIZES:
+        return normalized
+    print(f"[warn] Unsupported size '{size}'. Falling back to {DEFAULT_SIZE}.")
+    return DEFAULT_SIZE
 
 
 def create_sora_job(
     client: OpenAI,
-    payload: Dict[str, Any],
+    request: Dict[str, Any],
 ) -> Any:
     try:
-        return client.responses.create(**payload)
+        return client.videos.create(**request)
     except OpenAIError as exc:
         raise SystemExit(f"Failed to create Sora video job: {exc}") from exc
 
 
 def poll_sora_job(
     client: OpenAI,
-    response_id: str,
+    initial_job: Any,
     poll_interval: float,
     timeout: float,
 ) -> Any:
     start_time = time.monotonic()
-    last_status = ""
+    last_status: Optional[str] = None
+    last_progress: Optional[int] = None
+    job = initial_job
 
-    while True:
-        try:
-            job = client.responses.retrieve(response_id)
-        except OpenAIError as exc:
-            raise SystemExit(f"Polling failed: {exc}") from exc
-
-        status = getattr(job, "status", None) or job.get("status")  # type: ignore
-        progress = extract_progress(job)
-        if status != last_status or progress is not None:
-            progress_note = f" ({progress*100:.1f}% complete)" if progress is not None else ""
+    while True:  # pragma: no branch - manual polling
+        status = getattr(job, "status", None)
+        progress = getattr(job, "progress", None)
+        if status != last_status or progress != last_progress:
+            progress_note = f" ({progress}%)" if progress is not None else ""
             print(f"[status] {status}{progress_note}")
             last_status = status
+            last_progress = progress
 
-        if status in {"completed", "failed", "cancelled"}:
+        if status in {"completed", "failed"}:
             return job
 
         if time.monotonic() - start_time > timeout:
             raise SystemExit(
-                f"Timed out waiting for job {response_id} after {timeout} seconds."
+                f"Timed out waiting for job {getattr(job, 'id', 'unknown')} after {timeout} seconds."
             )
 
         time.sleep(poll_interval)
-
-
-def extract_progress(job: Any) -> Optional[float]:
-    progress = getattr(job, "progress", None)
-    if progress is None and isinstance(job, dict):
-        progress = job.get("progress")
-    if progress is None:
-        metadata = getattr(job, "metadata", None) or {}
-        if isinstance(metadata, dict):
-            progress = metadata.get("progress")
-
-    if progress is None:
-        return None
-    try:
-        return float(progress)
-    except (TypeError, ValueError):
-        return None
+        try:
+            job = client.videos.retrieve(getattr(job, "id"))
+        except OpenAIError as exc:
+            raise SystemExit(f"Polling failed: {exc}") from exc
 
 
 def resolve_output_path(args: argparse.Namespace, suffix: str = ".mp4") -> Path:
     if args.output:
         return args.output
-    timestamp = datetime.utcnow().strftime("%Y%m%d-%H%M%S")
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     return Path(f"sora_result_{timestamp}{suffix}")
 
 
-def extract_asset_id(job: Any) -> Optional[str]:
-    """
-    Walk the outputs to find a video asset identifier.
-    """
-    output_blocks = getattr(job, "output", None) or getattr(job, "outputs", None)
-    if not output_blocks and isinstance(job, dict):
-        output_blocks = job.get("output") or job.get("outputs")
-
-    if not output_blocks:
-        return None
-
-    def search_content(content_items: Iterable[Dict[str, Any]]) -> Optional[str]:
-        for item in content_items:
-            if not isinstance(item, dict):
-                continue
-            item_type = item.get("type")
-            if item_type in {"output_video", "video"} and item.get("asset_id"):
-                return item["asset_id"]
-            if item_type == "content" and isinstance(item.get("content"), list):
-                nested = search_content(item["content"])
-                if nested:
-                    return nested
-        return None
-
-    for block in output_blocks:
-        content_list = None
-        if isinstance(block, dict):
-            content_list = block.get("content")
-        if isinstance(content_list, list):
-            asset_id = search_content(content_list)
-            if asset_id:
-                return asset_id
-    return None
-
-
-def download_asset(client: OpenAI, asset_id: str, destination: Path) -> None:
+def download_video_asset(client: OpenAI, video_id: str, destination: Path) -> None:
     destination.parent.mkdir(parents=True, exist_ok=True)
     try:
-        stream = client.assets.content(asset_id)
-    except AttributeError:
-        raise SystemExit(
-            "The OpenAI client does not expose assets.content; update the SDK."
-        )
+        stream = client.videos.download_content(video_id, variant="video")
     except OpenAIError as exc:
-        raise SystemExit(f"Failed to access asset {asset_id}: {exc}") from exc
+        raise SystemExit(f"Failed to download video {video_id}: {exc}") from exc
 
-    try:
-        with destination.open("wb") as handle:
-            for chunk in stream:
-                if not chunk:
-                    continue
-                if isinstance(chunk, bytes):
-                    handle.write(chunk)
-                elif hasattr(chunk, "decode"):
-                    handle.write(chunk.decode("utf-8").encode("utf-8"))
-                else:
-                    data = getattr(chunk, "data", None)
-                    if isinstance(data, bytes):
-                        handle.write(data)
-                    else:
-                        raise TypeError(f"Unexpected chunk type: {type(chunk)}")
-    except TypeError as exc:
-        raise SystemExit(
-            f"Unable to stream asset {asset_id}; received unsupported chunk type: {exc}"
-        ) from exc
+    with destination.open("wb") as handle:
+        for chunk in stream.iter_bytes():
+            if chunk:
+                handle.write(chunk)
 
 
 def summarize_cost(job: Any) -> Optional[str]:
@@ -570,14 +520,20 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
         print("\nRefining prompt with GPT-5...\n")
         review = improve_prompt(client, prompt, model=args.refinement_model)
 
+    if args.refine_only:
+        display_prompt_review(review)
+        print("\nRefined prompt ready to copy:\n")
+        print(textwrap.indent(review.improved, prefix="  "))
+        return
+
     final_prompt = choose_prompt(review, auto_approve=args.auto_approve)
     print("\nFinal prompt selected.\n")
 
-    payload = build_video_request_payload(final_prompt, args)
+    request_payload = build_video_request_payload(final_prompt, args)
 
     if args.dry_run:
         print("[dry-run] Payload to send:")
-        print(json.dumps(payload, indent=2))
+        print(json.dumps(request_payload, indent=2))
         return
 
     print("Submitting Sora video generation job...")
@@ -585,30 +541,29 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
         api_key = ensure_api_key()
         client = instantiate_client(api_key)
 
-    response = create_sora_job(client, payload)
-    response_id = getattr(response, "id", None) or response.get("id")  # type: ignore
-    if not response_id:
-        raise SystemExit("API response missing ID field.")
+    job = create_sora_job(client, request_payload)
+    job_id = getattr(job, "id", None)
+    if not job_id:
+        raise SystemExit("API response missing video ID field.")
 
-    print(f"Job ID: {response_id}")
+    print(f"Job ID: {job_id}")
     job = poll_sora_job(
         client,
-        response_id=response_id,
+        initial_job=job,
         poll_interval=args.poll_interval,
         timeout=args.timeout,
     )
 
-    job_status = getattr(job, "status", None) or job.get("status")  # type: ignore
+    job_status = getattr(job, "status", None)
     if job_status != "completed":
+        error = getattr(job, "error", None)
+        if error:
+            raise SystemExit(f"Job ended with status {job_status}: {error}")
         raise SystemExit(f"Job ended with status: {job_status}")
 
-    asset_id = extract_asset_id(job)
-    if not asset_id:
-        raise SystemExit("Completed job did not include a downloadable asset.")
-
-    target_path = resolve_output_path(args, suffix=f".{args.format.lstrip('.')}")
-    print(f"Downloading video asset {asset_id} to {target_path}...")
-    download_asset(client, asset_id, target_path)
+    target_path = resolve_output_path(args)
+    print(f"Downloading video {job_id} to {target_path}...")
+    download_video_asset(client, job_id, target_path)
 
     print(f"Video saved to {target_path.resolve()}")
     cost_summary = summarize_cost(job)
