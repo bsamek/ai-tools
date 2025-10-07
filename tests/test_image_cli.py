@@ -93,27 +93,27 @@ def test_load_prompt_from_stdin(monkeypatch):
     assert prompt == "A scenic landscape"
 
 
-class DummyResponseOutput:
-    def __init__(self, type_: str, result: str):
-        self.type = type_
-        self.result = result
+class DummyImageData:
+    def __init__(self, b64_json: str | None):
+        self.b64_json = b64_json
+
+
+class DummyImagesResource:
+    def __init__(self, data: list[DummyImageData]):
+        self._data = data
+
+    def generate(self, **kwargs):  # noqa: D401 - mimic OpenAI client interface
+        return types.SimpleNamespace(data=self._data)
 
 
 class DummyClient:
-    def __init__(self, outputs):
-        self._outputs = outputs
-        self.responses = types.SimpleNamespace(create=self._create)
-
-    def _create(self, **kwargs):
-        return types.SimpleNamespace(output=self._outputs)
+    def __init__(self, data: list[DummyImageData]):
+        self.images = DummyImagesResource(data)
 
 
 def test_generate_image_success():
-    outputs = [
-        DummyResponseOutput("text", "ignored"),
-        DummyResponseOutput("image_generation_call", "ZmFrZV9pbWFnZQ=="),
-    ]
-    client = DummyClient(outputs)
+    data = [DummyImageData("ZmFrZV9pbWFnZQ==")]
+    client = DummyClient(data)
 
     image_data = image_cli.generate_image(client, "prompt", "model")
 
@@ -121,21 +121,22 @@ def test_generate_image_success():
 
 
 def test_generate_image_no_image_data():
-    client = DummyClient([DummyResponseOutput("text", "nothing")])
+    client = DummyClient([DummyImageData(None)])
 
     with pytest.raises(SystemExit) as exc:
         image_cli.generate_image(client, "prompt", "model")
 
-    assert "No image" in str(exc.value)
+    assert "Image payload missing" in str(exc.value)
 
 
 def test_generate_image_handles_openai_error():
+    class ErrorImagesResource:
+        def generate(self, **kwargs):
+            raise image_cli.OpenAIError("boom")
+
     class ErrorClient:
         def __init__(self):
-            self.responses = types.SimpleNamespace(create=self._create)
-
-        def _create(self, **kwargs):
-            raise image_cli.OpenAIError("boom")
+            self.images = ErrorImagesResource()
 
     client = ErrorClient()
 
