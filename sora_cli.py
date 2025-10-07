@@ -86,6 +86,12 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         help="Skip confirmation and use the refined prompt automatically.",
     )
     parser.add_argument(
+        "--env-file",
+        type=Path,
+        default=Path(".env"),
+        help="Optional dotenv-style file to populate OPENAI_API_KEY if the environment is unset.",
+    )
+    parser.add_argument(
         "--skip-refinement",
         action="store_true",
         help="Bypass GPT-5 prompt refinement and send the prompt as-is.",
@@ -146,6 +152,26 @@ def ensure_api_key() -> str:
             "OPENAI_API_KEY environment variable is required to call the OpenAI API."
         )
     return api_key
+
+
+def populate_env_from_file(env_path: Path) -> None:
+    if not env_path.exists() or not env_path.is_file():
+        return
+    try:
+        for line in env_path.read_text(encoding="utf-8").splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            if "=" not in stripped:
+                continue
+            key, value = stripped.split("=", 1)
+            key = key.strip()
+            if not key:
+                continue
+            value = value.strip().strip('"').strip("'")
+            os.environ.setdefault(key, value)
+    except OSError as exc:
+        print(f"[warn] Failed to read env file {env_path}: {exc}")
 
 
 def load_prompt_from_args(args: argparse.Namespace) -> str:
@@ -523,6 +549,10 @@ def summarize_cost(job: Any) -> Optional[str]:
 
 def main(argv: Optional[Iterable[str]] = None) -> None:
     args = parse_args(argv)
+
+    if args.env_file:
+        populate_env_from_file(args.env_file)
+
     prompt = load_prompt_from_args(args)
 
     client: Optional[OpenAI] = None
