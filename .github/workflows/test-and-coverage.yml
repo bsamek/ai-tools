@@ -90,7 +90,11 @@ jobs:
         run: |
           git fetch --no-tags origin +refs/heads/${{ github.base_ref }}:refs/remotes/origin/${{ github.base_ref }}
           base="origin/${{ github.base_ref }}"
-          pct=$(diff-cover "${REPORT_PATH}" --compare-branch "$base" --json-report - | python - <<'PY'
+          pct=$(diff-cover \
+              "${REPORT_PATH}" \
+              --compare-branch "$base" \
+              --include '**/*.py' \
+              --json-report - | python - <<'PY'
           import json
           import sys
 
