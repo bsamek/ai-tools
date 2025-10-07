@@ -62,7 +62,8 @@ PROMPT_GUIDANCE = textwrap.dedent(
     - Camera perspective, motion, framing, and transitions.
     - Lighting, color palette, and mood.
     - Style (photorealistic, cinematic, animation) and post-processing notes.
-    - Desired duration, aspect ratio, and output format hints.
+    - Aspect ratio and output format hints.
+    - Do not mention duration; it is configured separately via the API parameters.
     """
 ).strip()
 
