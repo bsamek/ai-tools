@@ -67,7 +67,7 @@ jobs:
           echo "| Total lines | ${TOTAL}% |" >> "$GITHUB_STEP_SUMMARY"
           echo "Total coverage: ${TOTAL}%"
 
-      - name: Enforce absolute floor
+      - name: Enforce absolute floor (Cobertura)
         run: |
           python - <<'PY'
           import os
@@ -80,6 +80,10 @@ jobs:
               sys.exit(1)
           print(f"Absolute floor OK: {total:.2f}% ≥ {min_total:.2f}%")
           PY
+
+      - name: Enforce CLI floor with trace helper
+        run: |
+          python tools/run_coverage.py --fail-under "${MIN_TOTAL}"
 
       - name: Enforce patch coverage (diff vs base)
         if: github.event_name == 'pull_request'
