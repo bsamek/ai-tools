@@ -85,6 +85,11 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         action="store_true",
         help="Skip confirmation and use the refined prompt automatically.",
     )
+    parser.add_argument(
+        "--skip-refinement",
+        action="store_true",
+        help="Bypass GPT-5 prompt refinement and send the prompt as-is.",
+    )
     parser.add_argument("--output", type=Path, help="Destination filename for the video.")
     parser.add_argument(
         "--duration",
@@ -523,7 +528,10 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
     client: Optional[OpenAI] = None
     review: PromptReview
 
-    if args.dry_run:
+    if args.skip_refinement:
+        print("Skipping prompt refinement (flag provided).")
+        review = PromptReview(original=prompt, improved=prompt)
+    elif args.dry_run:
         review = PromptReview(original=prompt, improved=prompt)
     else:
         api_key = ensure_api_key()
