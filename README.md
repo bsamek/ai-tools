@@ -40,3 +40,17 @@ Requirements:
 Run without `--dry-run` to submit a job, then wait for the video to download into the current directory. Use `--help` for advanced options (duration, output size, auto-approval, etc.).
 Add `--skip-refinement` to send your prompt directly to Sora without the GPT-5 refinement pass.
 Add `--refine-only` to run the refinement step (with GPT-5) and print the improved prompt without generating video.
+
+## Running Tests
+
+Use `uv` to run the test suite with `pytest` (dependencies are resolved automatically):
+
+```bash
+uv run --with pytest pytest
+```
+
+To execute a single test module, append its path:
+
+```bash
+uv run --with pytest pytest tests/test_image_cli.py
+```
