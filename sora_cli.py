@@ -42,6 +42,7 @@ except ImportError as exc:  # pragma: no cover - runtime failure path
 DEFAULT_DURATION = 8
 DEFAULT_SIZE = "1280x720"
 DEFAULT_SORA_MODEL = "sora-2"
+ALLOWED_SORA_MODELS = ("sora-2", "sora-2-pro")
 DEFAULT_REASONING_MODEL = "gpt-5"
 
 ALLOWED_VIDEO_SIZES = {
@@ -135,9 +136,12 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         help="Print the request payload instead of calling Sora.",
     )
     parser.add_argument(
+        "--model",
         "--sora-model",
+        dest="sora_model",
+        choices=sorted(ALLOWED_SORA_MODELS),
         default=DEFAULT_SORA_MODEL,
-        help="Override Sora model identifier.",
+        help="Sora model identifier to use.",
     )
     parser.add_argument(
         "--refinement-model",

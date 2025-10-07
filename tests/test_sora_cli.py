@@ -132,12 +132,17 @@ def test_build_video_request_payload_defaults():
 
 
 def test_build_video_request_payload_custom():
-    args = make_args(duration=12, size="1792x1024", sora_model="sora-x")
+    args = make_args(duration=12, size="1792x1024", sora_model="sora-2-pro")
     payload = sora_cli.build_video_request_payload("Prompt", args)
 
-    assert payload["model"] == "sora-x"
+    assert payload["model"] == "sora-2-pro"
     assert payload["seconds"] == "12"
     assert payload["size"] == "1792x1024"
+
+
+def test_parse_args_invalid_model():
+    with pytest.raises(SystemExit):
+        sora_cli.parse_args(["--model", "not-supported", "--prompt", "hi"])
 
 
 def test_normalize_duration_invalid(capsys):

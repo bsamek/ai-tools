@@ -22,7 +22,7 @@ For landscape/portrait orientation, include it in your prompt (e.g., "landscape 
 
 Use `--help` for more options:
 - `--file` - Read prompt from a file
-- `--model` - Override model (defaults to gpt-5-mini)
+- `--model` - Override model (defaults to gpt-image-1)
 - `--dry-run` - Preview without generating
 
 ## Sora CLI
@@ -40,6 +40,7 @@ Requirements:
 Run without `--dry-run` to submit a job, then wait for the video to download into the current directory. Use `--help` for advanced options (duration, output size, auto-approval, etc.).
 Add `--skip-refinement` to send your prompt directly to Sora without the GPT-5 refinement pass.
 Add `--refine-only` to run the refinement step (with GPT-5) and print the improved prompt without generating video.
+Use `--model` to choose between `sora-2` (default) and `sora-2-pro` when creating the video job.
 
 ## Running Tests
 
