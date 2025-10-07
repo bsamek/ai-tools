@@ -54,3 +54,21 @@ To execute a single test module, append its path:
 ```bash
 uv run --with pytest pytest tests/test_image_cli.py
 ```
+
+## Coverage
+
+The repository includes a lightweight coverage helper at `tools/run_coverage.py`. It wraps
+`pytest` with Python's built-in `trace` module to measure executable-line coverage across the
+CLI entry points without pulling in third-party dependencies.
+
+Run it via `uv` to ensure the test suite meets the minimum threshold (for example, 85%):
+
+```bash
+uv run --with pytest python tools/run_coverage.py --fail-under 85
+```
+
+You can pass any additional `pytest` arguments after `--`, such as targeting specific tests:
+
+```bash
+uv run --with pytest python tools/run_coverage.py -- --maxfail=1 tests/test_image_cli.py
+```
