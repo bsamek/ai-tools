@@ -95,19 +95,25 @@ jobs:
       - name: Enforce patch coverage (diff vs base)
         if: github.event_name == 'pull_request'
         run: |
+          set -eo pipefail
           base="origin/${{ github.base_ref }}"
-          pct=$(diff-cover \
-              "${REPORT_PATH}" \
-              --compare-branch "$base" \
-              --include '**/*.py' \
-              --json-report - | python - <<'PY'
+          if git diff --name-only "$base"...HEAD -- '*.py' | grep -q .; then
+            pct=$(diff-cover \
+                "${REPORT_PATH}" \
+                --compare-branch "$base" \
+                --include '**/*.py' \
+                --format json:- | python - <<'PY'
           import json
           import sys
 
           data = json.load(sys.stdin)
           print(data['total']['coverage'] or 0)
           PY
-          )
+            )
+          else
+            echo "No Python changes detected; skipping diff-cover enforcement."
+            pct=100
+          fi
           printf 'Patch coverage: %.2f%%\n' "$pct"
           {
             echo "| Changed lines | $(printf '%.2f' "$pct")% |"
