@@ -34,7 +34,7 @@ except ImportError as exc:  # pragma: no cover - runtime failure path
     ) from exc
 
 
-DEFAULT_MODEL = "gpt-4.1-mini"
+DEFAULT_MODEL = "gpt-5-mini"
 
 
 def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
@@ -181,7 +181,7 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
     api_key = ensure_api_key()
     client = instantiate_client(api_key)
 
-    print(f"\nGenerating image with {args.model}...\n")
+    print(f"\nGenerating image using {args.model}...\n")
     image_base64 = generate_image(client, prompt, args.model)
 
     target_path = resolve_output_path(args)
