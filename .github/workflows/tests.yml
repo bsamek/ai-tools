@@ -27,3 +27,44 @@ jobs:
             cat coverage.txt;
             echo '```';
           } >> "$GITHUB_STEP_SUMMARY"
+      - name: Comment coverage on PR
+        if: ${{ github.event_name == 'pull_request' }}
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const marker = '<!-- coverage-report -->';
+            const coverage = fs.readFileSync('coverage.txt', 'utf8').trim();
+            const body = [
+              marker,
+              '### Coverage Summary',
+              '```',
+              coverage,
+              '```',
+            ].join('\n');
+            const { owner, repo } = context.repo;
+            const issue_number = context.issue.number;
+            const existingComments = await github.rest.issues.listComments({
+              owner,
+              repo,
+              issue_number,
+              per_page: 100,
+            });
+            const previous = existingComments.data.find(comment =>
+              comment.body && comment.body.startsWith(marker)
+            );
+            if (previous) {
+              await github.rest.issues.updateComment({
+                owner,
+                repo,
+                comment_id: previous.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number,
+                body,
+              });
+            }
