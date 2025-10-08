@@ -55,3 +55,17 @@ To execute a single test module, append its path:
 ```bash
 uv run --with pytest pytest tests/test_image_cli.py
 ```
+
+## Measuring Coverage
+
+Run the coverage helper to measure how well the tests exercise `image_cli.py` and `sora_cli.py`:
+
+```bash
+uv run measure_coverage.py
+```
+
+Pass extra options through to `pytest` with `--pytest-args`, for example to focus on a subset of tests:
+
+```bash
+uv run measure_coverage.py --pytest-args "-k prompt"
+```

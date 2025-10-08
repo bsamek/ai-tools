@@ -14,6 +14,16 @@ jobs:
         with:
           python-version: '3.13'
       - name: Install dependencies
-        run: pip install pytest
-      - name: Run tests
-        run: pytest
+        run: pip install pytest coverage
+      - name: Run tests with coverage
+        run: coverage run --source=image_cli,sora_cli -m pytest
+      - name: Publish coverage summary
+        run: |
+          coverage report --show-missing > coverage.txt
+          cat coverage.txt
+          {
+            echo '### Coverage Summary';
+            echo '```';
+            cat coverage.txt;
+            echo '```';
+          } >> "$GITHUB_STEP_SUMMARY"
