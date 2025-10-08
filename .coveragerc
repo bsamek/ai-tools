@@ -1,0 +1,16 @@
+[run]
+relative_files = true
+source = .
+omit =
+    tests/*
+    .venv/*
+    */site-packages/*
+
+[report]
+include =
+    image_cli.py
+    sora_cli.py
+show_missing = true
+
+[html]
+directory = htmlcov

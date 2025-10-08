@@ -5,6 +5,10 @@ on:
   push:
     branches: [main]
 
+permissions:
+  contents: read
+  pull-requests: write
+
 jobs:
   tests:
     runs-on: ubuntu-latest
@@ -14,6 +18,16 @@ jobs:
         with:
           python-version: '3.13'
       - name: Install dependencies
-        run: pip install pytest
-      - name: Run tests
-        run: pytest
+        run: pip install pytest coverage
+      - name: Run tests with coverage
+        run: |
+          coverage run -m pytest tests/
+          coverage report --include=image_cli.py,sora_cli.py -m
+          coverage json --include=image_cli.py,sora_cli.py
+      - name: Coverage comment
+        if: github.event_name == 'pull_request'
+        uses: py-cov-action/python-coverage-comment-action@v3
+        with:
+          GITHUB_TOKEN: ${{ github.token }}
+          MINIMUM_GREEN: 90
+          MINIMUM_ORANGE: 80
