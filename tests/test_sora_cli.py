@@ -1,4 +1,5 @@
 import argparse
+import io
 import json
 import os
 import sys
@@ -27,6 +28,10 @@ fake_openai.OpenAIError = _DummyOpenAIError
 sys.modules.setdefault("openai", fake_openai)
 
 import sora_cli
+
+
+def mock_read_text_error(*args, **kwargs):
+    raise OSError("Permission denied")
 
 
 def make_args(**overrides: object) -> argparse.Namespace:
@@ -85,6 +90,54 @@ def test_populate_env_from_file(tmp_path, monkeypatch):
     assert os.environ["OPENAI_API_KEY"] == "from_file"
     assert os.environ["OTHER"] == "value"
     assert os.environ["QUOTED"] == "quoted value"
+
+
+def test_populate_env_from_file_handles_read_error(tmp_path, monkeypatch, capsys):
+    env_file = tmp_path / "protected.env"
+    env_file.touch()
+    monkeypatch.setattr(Path, "read_text", mock_read_text_error)
+
+    sora_cli.populate_env_from_file(env_file)
+
+    captured = capsys.readouterr()
+    assert "[warn] Failed to read env file" in captured.out
+
+
+def test_load_prompt_from_args_inline():
+    args = make_args(prompt="  inline prompt  ")
+    assert sora_cli.load_prompt_from_args(args) == "inline prompt"
+
+
+def test_load_prompt_from_args_file(tmp_path):
+    prompt_file = tmp_path / "prompt.txt"
+    prompt_file.write_text("  file prompt  ")
+    args = make_args(file=prompt_file)
+    assert sora_cli.load_prompt_from_args(args) == "file prompt"
+
+
+def test_load_prompt_from_args_file_error(tmp_path, monkeypatch):
+    prompt_file = tmp_path / "unreadable.txt"
+    prompt_file.touch()
+    args = make_args(file=prompt_file)
+    monkeypatch.setattr(Path, "read_text", mock_read_text_error)
+
+    with pytest.raises(SystemExit) as exc:
+        sora_cli.load_prompt_from_args(args)
+    assert "Failed to read prompt file" in str(exc.value)
+
+
+def test_load_prompt_from_stdin(monkeypatch):
+    args = make_args()
+    monkeypatch.setattr(sys, "stdin", io.StringIO("  stdin prompt  "))
+    assert sora_cli.load_prompt_from_args(args) == "stdin prompt"
+
+
+def test_load_prompt_from_stdin_empty(monkeypatch):
+    args = make_args()
+    monkeypatch.setattr(sys, "stdin", io.StringIO("\n"))
+    with pytest.raises(SystemExit) as exc:
+        sora_cli.load_prompt_from_args(args)
+    assert "No prompt provided" in str(exc.value)
 
 
 class _Response:
@@ -180,6 +233,73 @@ def test_summarize_cost_iterable():
     assert summary == "credits: 1 | tokens: 2 | ≈ $3.0000 USD"
 
 
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        (None, ""),
+        ("text", "text"),
+        (123, "123"),
+        (True, "True"),
+        (["a", "b", 3], "a\nb\n3"),
+        ({"key": "value"}, '{\n  "key": "value"\n}'),
+    ],
+)
+def test_coerce_to_text(value, expected):
+    assert sora_cli._coerce_to_text(value) == expected
+
+
+def test_improve_prompt_api_error(capsys):
+    class ErrorClient:
+        def __init__(self, *args, **kwargs):
+            self.responses = self
+
+        def create(self, *args, **kwargs):
+            raise sora_cli.OpenAIError("API is down")
+
+    client = ErrorClient()
+    review = sora_cli.improve_prompt(client, "original prompt")
+    assert review.original == "original prompt"
+    assert review.improved == "original prompt"
+
+    captured = capsys.readouterr()
+    assert "[warn] Prompt refinement failed" in captured.out
+
+
+def test_parse_prompt_review_handles_missing_keys():
+    payload = json.dumps({"wrong_key": "value"})
+    response = _Response(payload)
+    improved, _, _ = sora_cli.parse_prompt_review(response, "fallback")
+    assert improved == "fallback"
+
+
+def test_choose_prompt_select_original(monkeypatch):
+    monkeypatch.setattr("sys.stdin", io.StringIO("1\n"))
+    review = sora_cli.PromptReview(original="orig", improved="better")
+    final = sora_cli.choose_prompt(review, auto_approve=False)
+    assert final == "orig"
+
+
+def test_choose_prompt_select_refined(monkeypatch):
+    monkeypatch.setattr("sys.stdin", io.StringIO("2\n"))
+    review = sora_cli.PromptReview(original="orig", improved="better")
+    final = sora_cli.choose_prompt(review, auto_approve=False)
+    assert final == "better"
+
+
+def test_choose_prompt_reenter_manually(monkeypatch):
+    monkeypatch.setattr("sys.stdin", io.StringIO("3\noverride\n\n"))
+    review = sora_cli.PromptReview(original="orig", improved="better")
+    final = sora_cli.choose_prompt(review, auto_approve=False)
+    assert final == "override"
+
+
+def test_get_manual_prompt_empty_input(monkeypatch):
+    monkeypatch.setattr("sys.stdin", io.StringIO("\n"))
+    with pytest.raises(SystemExit) as exc:
+        sora_cli.get_manual_prompt()
+    assert "cannot be empty" in str(exc.value)
+
+
 def test_choose_prompt_auto_approve(capsys):
     review = sora_cli.PromptReview(original="orig", improved="better")
     final = sora_cli.choose_prompt(review, auto_approve=True)
@@ -187,3 +307,108 @@ def test_choose_prompt_auto_approve(capsys):
     captured = capsys.readouterr()
     assert "Using refined prompt." in captured.out
 
+
+def test_main_dry_run(capsys):
+    args = ["--prompt", "test", "--dry-run"]
+    sora_cli.main(args)
+    captured = capsys.readouterr()
+    assert "[dry-run] Payload to send:" in captured.out
+    assert '"prompt": "test"' in captured.out
+
+
+def test_main_refine_only(capsys, monkeypatch):
+    class MockClient:
+        def __init__(self, *args, **kwargs):
+            self.responses = self
+        def create(self, *args, **kwargs):
+            return _Response(json.dumps({"improved_prompt": "refined"}))
+
+    monkeypatch.setenv("OPENAI_API_KEY", "fake")
+    monkeypatch.setattr(sora_cli, "instantiate_client", MockClient)
+    args = ["--prompt", "test", "--refine-only"]
+    sora_cli.main(args)
+    captured = capsys.readouterr()
+    assert "Refined prompt ready to copy" in captured.out
+    assert "refined" in captured.out
+
+
+def test_resolve_output_path_generates_default(monkeypatch):
+    class MockDatetime:
+        @classmethod
+        def now(cls, *args, **kwargs):
+            return types.SimpleNamespace(strftime=lambda fmt: "20240101-120000")
+
+    monkeypatch.setattr(sora_cli, "datetime", MockDatetime)
+    args = make_args()
+    path = sora_cli.resolve_output_path(args)
+    assert path == Path("sora_result_20240101-120000.mp4")
+
+
+def test_main_job_fails(capsys, monkeypatch):
+    class MockJob:
+        id = "job_123"
+        status = "failed"
+        error = "Something went wrong"
+        usage = None
+
+    class MockClient:
+        def __init__(self, *args, **kwargs):
+            self.videos = self
+        def create(self, **kwargs):
+            return MockJob()
+        def retrieve(self, *args, **kwargs):
+            return MockJob()
+
+    monkeypatch.setenv("OPENAI_API_KEY", "fake")
+    monkeypatch.setattr(sora_cli, "instantiate_client", MockClient)
+    args = ["--prompt", "test", "--skip-refinement"]
+    with pytest.raises(SystemExit) as exc:
+        sora_cli.main(args)
+    assert "Something went wrong" in str(exc.value)
+
+
+def test_main_job_timeout(capsys, monkeypatch):
+    class MockJob:
+        id = "job_123"
+        status = "processing"
+        progress = 50
+        usage = None
+
+    class MockClient:
+        def __init__(self, *args, **kwargs):
+            self.videos = self
+        def create(self, **kwargs):
+            return MockJob()
+        def retrieve(self, *args, **kwargs):
+            return MockJob()
+
+    monkeypatch.setenv("OPENAI_API_KEY", "fake")
+    monkeypatch.setattr(sora_cli, "instantiate_client", MockClient)
+    args = ["--prompt", "test", "--skip-refinement", "--timeout", "0", "--poll-interval", "0.05"]
+    with pytest.raises(SystemExit) as exc:
+        sora_cli.main(args)
+    assert "Timed out" in str(exc.value)
+
+
+def test_main_download_fails(capsys, monkeypatch):
+    class MockJob:
+        id = "job_123"
+        status = "completed"
+        usage = None
+
+    class MockClient:
+        def __init__(self, *args, **kwargs):
+            self.videos = self
+        def create(self, **kwargs):
+            return MockJob()
+        def retrieve(self, *args, **kwargs):
+            return MockJob()
+        def download_content(self, *args, **kwargs):
+            raise sora_cli.OpenAIError("Download failed")
+
+    monkeypatch.setenv("OPENAI_API_KEY", "fake")
+    monkeypatch.setattr(sora_cli, "instantiate_client", MockClient)
+    args = ["--prompt", "test", "--skip-refinement"]
+    with pytest.raises(SystemExit) as exc:
+        sora_cli.main(args)
+    assert "Failed to download video" in str(exc.value)

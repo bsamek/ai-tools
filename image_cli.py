@@ -84,7 +84,7 @@ def populate_env_from_file(env_path: Path) -> None:
             if "=" not in stripped:
                 continue
             key, value = stripped.split("=", 1)
-            key = key.strip()
+            key = key.strip().strip('"').strip("'")
             if not key:
                 continue
             value = value.strip().strip('"').strip("'")
