@@ -14,7 +14,6 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent
 TESTS_DIR = REPO_ROOT / "tests"
 TARGET_MODULES = ("image_cli", "sora_cli")
-TARGET_FILES = tuple(f"{module}.py" for module in TARGET_MODULES)
 
 
 def ensure_dependency(module_name: str) -> None:
@@ -69,13 +68,11 @@ def main() -> None:
 
     run_command(coverage_run_cmd)
 
-    include_patterns = ",".join(TARGET_FILES)
     report_cmd = [
         sys.executable,
         "-m",
         "coverage",
         "report",
-        f"--include={include_patterns}",
         "--show-missing",
     ]
 
