@@ -14,6 +14,13 @@ jobs:
         with:
           python-version: '3.13'
       - name: Install dependencies
-        run: pip install pytest
-      - name: Run tests
-        run: pytest
+        run: pip install coverage pytest
+      - name: Run tests with coverage
+        run: coverage run -m pytest
+      - name: Generate coverage report
+        run: coverage xml
+      - name: Python Coverage Comment
+        uses: py-cov-action/python-coverage-comment-action@v3.38
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          coverage-file: coverage.xml
