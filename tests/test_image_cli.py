@@ -1,5 +1,6 @@
 import argparse
 import base64
+import datetime
 import io
 import os
 import sys
@@ -93,6 +94,31 @@ def test_load_prompt_from_stdin(monkeypatch):
     assert prompt == "A scenic landscape"
 
 
+def test_load_prompt_from_args_prefers_inline(monkeypatch):
+    args = make_args(prompt=" inline text ")
+    monkeypatch.setattr(sys, "stdin", io.StringIO("should not be read"))
+
+    prompt = image_cli.load_prompt_from_args(args)
+
+    assert prompt == "inline text"
+
+
+def test_load_prompt_from_args_missing_file(tmp_path):
+    missing = tmp_path / "missing.txt"
+    args = make_args(file=missing)
+
+    with pytest.raises(SystemExit) as exc:
+        image_cli.load_prompt_from_args(args)
+
+    assert str(missing) in str(exc.value)
+
+
+def test_ensure_api_key_returns_value(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "secret")
+
+    assert image_cli.ensure_api_key() == "secret"
+
+
 class DummyImageData:
     def __init__(self, b64_json: str | None):
         self.b64_json = b64_json
@@ -153,6 +179,20 @@ def test_resolve_output_path_returns_explicit_path():
     assert image_cli.resolve_output_path(args) == target
 
 
+def test_resolve_output_path_generates_timestamp(monkeypatch):
+    class FixedDateTime:
+        @staticmethod
+        def now(tz=None):
+            assert tz == image_cli.timezone.utc
+            return datetime.datetime(2024, 1, 2, 3, 4, 5, tzinfo=tz)
+
+    monkeypatch.setattr(image_cli, "datetime", FixedDateTime)
+
+    path = image_cli.resolve_output_path(make_args(output=None))
+
+    assert path.name == "image_result_20240102-030405.png"
+
+
 def test_save_image_writes_file(tmp_path):
     destination = tmp_path / "image.png"
     encoded = base64.b64encode(b"image-bytes").decode("ascii")
@@ -160,6 +200,15 @@ def test_save_image_writes_file(tmp_path):
     image_cli.save_image(encoded, destination)
 
     assert destination.read_bytes() == b"image-bytes"
+
+
+def test_save_image_invalid_base64(tmp_path):
+    destination = tmp_path / "bad.png"
+
+    with pytest.raises(SystemExit) as exc:
+        image_cli.save_image("not-base64!!", destination)
+
+    assert "Failed to save image" in str(exc.value)
 
 
 def test_main_dry_run(monkeypatch, capsys, tmp_path):
@@ -171,3 +220,35 @@ def test_main_dry_run(monkeypatch, capsys, tmp_path):
     captured = capsys.readouterr()
     assert "[dry-run]" in captured.out
     assert "A castle" in captured.out
+
+
+def test_main_success_flow(monkeypatch, tmp_path, capsys):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("OPENAI_API_KEY", "token")
+
+    dummy_client = object()
+    encoded = base64.b64encode(b"generated").decode("ascii")
+
+    def fake_instantiate(api_key: str):
+        assert api_key == "token"
+        return dummy_client
+
+    def fake_generate(client, prompt: str, model: str) -> str:
+        assert client is dummy_client
+        assert prompt == "Sunset"
+        assert model == "gpt-image-1"
+        return encoded
+
+    monkeypatch.setattr(image_cli, "instantiate_client", fake_instantiate)
+    monkeypatch.setattr(image_cli, "generate_image", fake_generate)
+
+    args = ["--prompt", "Sunset", "--output", "final.png"]
+
+    image_cli.main(args)
+
+    saved = tmp_path / "final.png"
+    assert saved.read_bytes() == b"generated"
+
+    captured = capsys.readouterr()
+    assert "Generating image" in captured.out
+    assert "Image saved to" in captured.out
