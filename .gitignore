@@ -3,3 +3,5 @@ __pycache__/
 tests/__pycache__/
 image_result_*.png
 sora_result_*.mp4
+.coverage
+htmlcov/

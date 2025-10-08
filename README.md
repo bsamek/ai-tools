@@ -55,3 +55,35 @@ To execute a single test module, append its path:
 ```bash
 uv run --with pytest pytest tests/test_image_cli.py
 ```
+
+## Test Coverage
+
+Measure test coverage for `image_cli.py` and `sora_cli.py` using the provided scripts:
+
+```bash
+./measure_coverage.sh
+```
+
+Or using the Python script:
+
+```bash
+./measure_coverage.py
+```
+
+The coverage script will:
+- Run all tests with coverage tracking
+- Display a coverage summary in the terminal
+- Generate an HTML report in `htmlcov/index.html`
+
+View the detailed HTML report:
+
+```bash
+open htmlcov/index.html
+```
+
+To run coverage manually:
+
+```bash
+uv run python -m coverage run -m pytest tests/
+uv run python -m coverage report --include=image_cli.py,sora_cli.py -m
+```
